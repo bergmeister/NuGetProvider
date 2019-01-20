@@ -2,8 +2,8 @@
 param(
     [Parameter(Mandatory=$false)]
     [string]
-    [ValidateSet('net451', 'netcoreapp2.0', 'netstandard1.6', 'all')]
-    $Framework = 'net451',
+    [ValidateSet('net452', 'netstandard2.0', 'all')]
+    $Framework = 'net452',
 
     [Parameter(Mandatory=$false)]
     [string]
@@ -17,17 +17,16 @@ param(
 & "$PSScriptRoot\Generate-Resources.ps1"
 
 if ($Framework -eq 'all') {
-    $frameworks = @('net451','netcoreapp2.0','netstandard1.6')
+    $frameworks = @('net452', 'netstandard2.0')
 } else {
     $frameworks = @($Framework)
 }
 
 foreach ($f in $frameworks) {
-    dotnet restore
     dotnet build --framework $f --configuration $Configuration
     if ($Destination) {
         $copyDir = $Destination.Replace("{Root}", $OneGetRepositoryRoot)
-        if ($f -eq 'net451') {
+        if ($f -eq 'net452') {
             $copyDir += "\\fullclr"
         } else {
             $copyDir += "\\coreclr\\$f"
