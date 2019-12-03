@@ -1223,10 +1223,34 @@ namespace Microsoft.PackageManagement.NuGetProvider
             // Check that response was successful or throw exception
             if (response == null || !response.IsSuccessStatusCode)
             {
-                if (!ignoreNullResponse)
+                if (response != null && (response.StatusCode == HttpStatusCode.Unauthorized) && request.Request.CredentialUsername.IsNullOrEmpty())
                 {
-                    request.Warning(Resources.Messages.CouldNotGetResponseFromQuery, query);
-                } else
+                    // If response returns unsuccessful status code, try again using credentials retrieved from credential provider
+                    // First call to the credential provider is to get credentials, but if those credentials fail,
+                    // we call the cred provider again to ask the user for new credentials, and then search try to validate uri again using new creds
+                    var credentials = request.Request.GetCredsFromCredProvider(query, request.Request, false);
+                    var newClient = PathUtility.GetHttpClientHelper(credentials.UserName, credentials.SecurePassword, request.Proxy);
+
+                    response = PathUtility.GetHttpResponse(newClient, query, (() => request.Request.IsCanceled),
+                        ((msg, num) => request.Verbose(Resources.Messages.RetryingDownload, msg, num)), (msg) => request.Verbose(msg), (msg) => request.Debug(msg));
+                    query = response.RequestMessage.RequestUri.AbsoluteUri;
+
+                    request.Request.SetHttpClient(newClient);
+
+                    if (response.StatusCode == HttpStatusCode.Unauthorized)
+                    {
+                        // Calling the credential provider for a second time, using -IsRetry
+                        credentials = request.Request.GetCredsFromCredProvider(query, request.Request, true);
+                        newClient = PathUtility.GetHttpClientHelper(credentials.UserName, credentials.SecurePassword, request.Proxy);
+
+                        response = PathUtility.GetHttpResponse(newClient, query, (() => request.Request.IsCanceled),
+                            ((msg, num) => request.Verbose(Resources.Messages.RetryingDownload, msg, num)), (msg) => request.Verbose(msg), (msg) => request.Debug(msg));
+                        query = response.RequestMessage.RequestUri.AbsoluteUri;
+
+                        request.Request.SetHttpClient(newClient);
+                    }
+                }
+                if (response == null || !response.IsSuccessStatusCode)
                 {
                     request.Debug(Resources.Messages.CouldNotGetResponseFromQuery, query);
                 }
@@ -1279,12 +1303,39 @@ namespace Microsoft.PackageManagement.NuGetProvider
             var response = PathUtility.GetHttpResponse(client, uri, (() => request.IsCanceled()),
                ((msg, num) => request.Verbose(Resources.Messages.RetryingDownload, msg, num)), (msg) => request.Verbose(msg), (msg) => request.Debug(msg));
 
-
             // Check that response was successful or write error
-            if (response == null || !response.IsSuccessStatusCode)
+            if (response == null || !response.IsSuccessStatusCode && request.Request.CredentialUsername.IsNullOrEmpty())
             {
-                request.Warning(Resources.Messages.CouldNotGetResponseFromQuery, uri);
-                return null;
+                // If response returns unsuccessful status code, try again using credentials retrieved from credential provider
+                // First call to the credential provider is to get credentials, but if those credentials fail,
+                // we call the cred provider again to ask the user for new credentials, and then search try to validate uri again using new creds
+                var credentials = request.Request.GetCredsFromCredProvider(query.ToString(), request.Request, false);
+                client = PathUtility.GetHttpClientHelper(credentials.UserName, credentials.SecurePassword, request.Proxy);
+
+                response = PathUtility.GetHttpResponse(client, query.ToString(), (() => request.Request.IsCanceled),
+                    ((msg, num) => request.Verbose(Resources.Messages.RetryingDownload, msg, num)), (msg) => request.Verbose(msg), (msg) => request.Debug(msg));
+                var queryStr = response.RequestMessage.RequestUri.AbsoluteUri;
+
+                request.Request.SetHttpClient(client);
+
+                if (response.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    // Calling the credential provider for a second time, using -IsRetry
+                    credentials = request.Request.GetCredsFromCredProvider(queryStr, request.Request, true);
+                    client = PathUtility.GetHttpClientHelper(credentials.UserName, credentials.SecurePassword, request.Proxy);
+
+                    response = PathUtility.GetHttpResponse(client, queryStr, (() => request.Request.IsCanceled),
+                        ((msg, num) => request.Verbose(Resources.Messages.RetryingDownload, msg, num)), (msg) => request.Verbose(msg), (msg) => request.Debug(msg));
+                    queryStr = response.RequestMessage.RequestUri.AbsoluteUri;
+
+                    request.Request.SetHttpClient(client);
+                }
+
+                if (response == null || !response.IsSuccessStatusCode)
+                {
+                    request.Debug(Resources.Messages.CouldNotGetResponseFromQuery, uri);
+                    return null;
+                }
             }
 
             // Read response and write out a stream
@@ -1476,7 +1527,7 @@ namespace Microsoft.PackageManagement.NuGetProvider
                         {
                             // report that we finished with the download
                             request.Progress(progressTracker.ProgressID, progressTracker.EndPercent,
-                                string.Format(CultureInfo.CurrentCulture, Resources.Messages.DownloadingProgress, totalDownloaded, totalBytesToReceive));
+                                string.Format(CultureInfo.CurrentCulture, Resources.Messages.DownloadingProgress, totalBytesToReceiveMB, totalBytesToReceiveMB));
 
                             request.Verbose(Messages.CompletedDownload, query);
 
